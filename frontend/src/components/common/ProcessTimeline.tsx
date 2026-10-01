@@ -40,6 +40,12 @@ export default function ProcessTimeline({ batches, herbs, methods, limit = 6 }: 
                 {batch.degree}
               </Tag>
               {batch.locked ? <Tag color="blue">已锁定</Tag> : <Tag>待判定</Tag>}
+              {batch.currentVersion ? (
+                <Tag color={(batch.decisions?.length ?? 0) > 1 ? 'purple' : 'geekblue'}>
+                  v{batch.currentVersion}
+                  {(batch.decisions?.length ?? 0) > 1 ? ` · ${batch.decisions?.length} 版` : ''}
+                </Tag>
+              ) : null}
               <div style={{ fontSize: 12, color: '#6b7a70' }}>
                 {herb?.name ?? '未知药材'} · {method?.name ?? '未知方法'} · {batch.fireLevel} ·{' '}
                 {formatDate(batch.startedAt)} · 得率 {batch.yieldRate}% · 操作人 {batch.operator}

@@ -22,7 +22,9 @@ export default function ProcessBoard() {
   const samples = useSampleStore((s) => s.samples);
 
   const pending = useMemo(() => batches.filter((b) => !b.locked), [batches]);
-  const due = useMemo(() => dueSamples(samples, 30), [samples]);
+  const pendingReviewSamples = useMemo(() => samples.filter((s) => s.reviewState === '待复核'), [samples]);
+  const activeSamples = useMemo(() => samples.filter((s) => s.reviewState !== '已作废'), [samples]);
+  const due = useMemo(() => dueSamples(activeSamples, 30), [activeSamples]);
   const degreeCount = useMemo(() => {
     return batches.reduce(
       (acc, b) => {
@@ -107,11 +109,33 @@ export default function ProcessBoard() {
         </Col>
         <Col xs={12} md={6}>
           <StatBadge label="30 天内到期留样" value={due.length} unit="份" status={due.length > 0 ? 'error' : 'success'} />
-        </Col>
-        <Col xs={12} md={6}>
+        </Col>        <Col xs={12} md={6}>
           <StatBadge label="平均得率" value={avgYield} unit="%" status="success" hint={`适中 ${degreeCount['适中']} / 不及 ${degreeCount['不及']} / 太过 ${degreeCount['太过']}`} />
         </Col>
       </Row>
+
+      {pendingReviewSamples.length > 0 ? (
+        <Alert
+          style={{ marginBottom: 16 }}
+          type="error"
+          showIcon
+          message={`留样待复核：${pendingReviewSamples.length} 份留样关联的批次改判程度转为太过`}
+          description={
+            <Space wrap>
+              {pendingReviewSamples.slice(0, 6).map((sample) => (
+                <Tag key={sample.id} color="red">
+                  {sample.sampleNo}（依据 v{sample.basisVersion ?? '-'}）
+                </Tag>
+              ))}
+              <Link to="/samples">
+                <Button size="small" type="link">
+                  前往留样台账说明理由，沿用或重新取样
+                </Button>
+              </Link>
+            </Space>
+          }
+        />
+      ) : null}
 
       {due.length > 0 ? (
         <Alert

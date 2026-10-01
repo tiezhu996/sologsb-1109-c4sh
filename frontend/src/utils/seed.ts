@@ -1,8 +1,9 @@
 import { db } from './db';
 import { HERB_ORIGINS, type HerbMaterial } from '../types/herb-material';
 import { METHOD_NAMES, type ProcessingMethod } from '../types/processing-method';
-import type { ProcessBatch } from '../types/process-batch';
-import { CABINETS, type RetainSample } from '../types/retain-sample';
+import type { BatchDecision, ProcessBatch } from '../types/process-batch';
+import type { RetainSample } from '../types/retain-sample';
+import { CABINETS } from '../types/retain-sample';
 import { judgeDegree, expectedYieldOf } from './degree';
 
 /** 首次打开时写入的示例台账，便于直接查看各页面效果 */
@@ -58,15 +59,18 @@ function buildSeedBatches(): ProcessBatch[] {
     const endedAt = isoMinutesAgo(45 * (index + 1));
     const startedAt = new Date(new Date(endedAt).getTime() - duration * 60_000).toISOString();
     const yieldRate = Number((expectedYieldOf(method) + ((index % 5) - 2) * 0.8).toFixed(1));
+    const temp = Math.round((method.tempRange[0] + method.tempRange[1]) / 2);
     const verdict = judgeDegree({
       method,
       fireLevel: fireLevel as ProcessBatch['fireLevel'],
       duration,
-      temp: Math.round((method.tempRange[0] + method.tempRange[1]) / 2),
+      temp,
       yieldRate,
     });
     const locked = index >= 2;
-    return {
+    const lockedAt = locked ? new Date(new Date(endedAt).getTime() + 30 * 60_000).toISOString() : undefined;
+
+    const batch: ProcessBatch = {
       id: `batch-${String(index + 1).padStart(3, '0')}`,
       batchNo,
       herbId,
@@ -74,16 +78,66 @@ function buildSeedBatches(): ProcessBatch[] {
       feedKg,
       auxUsedKg,
       fireLevel: fireLevel as ProcessBatch['fireLevel'],
+      temp,
+      duration,
       startedAt,
       endedAt,
       yieldRate,
       degree: verdict.degree,
       operator,
       locked,
-      lockedAt: locked ? new Date(new Date(endedAt).getTime() + 30 * 60_000).toISOString() : undefined,
+      lockedAt,
       qcBy: locked ? '质检员 · 赵敏' : undefined,
       remark,
     };
+
+    if (locked) {
+      const decisions: BatchDecision[] = [
+        {
+          version: 1,
+          kind: '初判',
+          degree: verdict.degree,
+          yieldRate,
+          methodId,
+          fireLevel: batch.fireLevel,
+          temp,
+          duration,
+          reason: '提交即锁定：班组初判',
+          qcBy: operator,
+          decidedAt: lockedAt!,
+        },
+      ];
+
+      // 演示复核改判：蜜炙黄芪 PZ-25085 初判适中，质检复核后改判太过（得率明显偏低、有焦苦味）
+      if (batch.id === 'batch-005') {
+        const rejudgedAt = new Date(new Date(lockedAt!).getTime() + 26 * 60_000).toISOString();
+        decisions.push({
+          version: 2,
+          kind: '改判',
+          degree: '太过',
+          yieldRate: 99.5,
+          methodId,
+          fireLevel: '武火',
+          temp: 168,
+          duration: 20,
+          reason: '复查断面颜色偏深、口尝有焦苦味，得率 99.5% 低于蜜炙预期 108% 达 6% 以上，改判太过并隔离本批',
+          qcBy: '质检员 · 赵敏',
+          decidedAt: rejudgedAt,
+        });
+        batch.degree = '太过';
+        batch.yieldRate = 99.5;
+        batch.methodId = methodId;
+        batch.fireLevel = '武火';
+        batch.temp = 168;
+        batch.duration = 20;
+        batch.currentVersion = 2;
+      } else {
+        batch.currentVersion = 1;
+      }
+      batch.decisions = decisions;
+    }
+
+    return batch;
   });
 }
 
@@ -97,10 +151,16 @@ function buildSeedSamples(batches: ProcessBatch[]): RetainSample[] {
     observer,
   });
 
-  return batches.slice(0, 6).map((batch, index) => {
+  // 留样只取自已锁定（已有判定版本）的批次
+  const lockedBatches = batches.filter((b) => b.locked);
+  const created: RetainSample[] = [];
+
+  lockedBatches.slice(0, 6).forEach((batch, index) => {
     const retainMonths = [6, 12, 18, 24][index % 4];
     const retainedAt = new Date(Date.now() - (index * 37 + 8) * 86_400_000).toISOString();
-    return {
+    const basisVersion = batch.currentVersion ?? 1;
+    const basisDecision = batch.decisions?.find((d) => d.version === basisVersion);
+    const sample: RetainSample = {
       id: `sample-${String(index + 1).padStart(3, '0')}`,
       sampleNo: `LY-${batch.batchNo}`,
       batchId: batch.id,
@@ -112,8 +172,55 @@ function buildSeedSamples(batches: ProcessBatch[]): RetainSample[] {
         logs(new Date(retainedAt).toISOString().slice(0, 10), '色泽符合标准', '气味正常', '无霉变', '赵敏'),
         logs(new Date(Date.now() - (index * 11 + 2) * 86_400_000).toISOString().slice(0, 10), '色泽略深', '气味正常', '无霉变', '赵敏'),
       ],
+      basisVersion,
+      basisDegree: basisDecision?.degree ?? batch.degree,
+      reviewState: '观察中',
     };
+
+    // 蜜炙黄芪的留样依据 v1 适中结论建立；批次已改判 v2 太过 → 关联留样待复核
+    if (batch.id === 'batch-005') {
+      sample.basisVersion = 1;
+      sample.basisDegree = '适中';
+      sample.reviewState = '待复核';
+      sample.pendingReason = 'v2 改判程度转为太过（原 适中）：复查断面颜色偏深、口尝有焦苦味，关联留样先待复核';
+    }
+
+    created.push(sample);
+
+    // 煅牡蛎演示「说明理由后重新取样」：旧留样作废，新留样绑定当前判定版本
+    if (batch.id === 'batch-006') {
+      const reviewedAt = new Date(Date.now() - 3 * 86_400_000).toISOString();
+      sample.reviewState = '已作废';
+      sample.reviewLogs = [
+        {
+          id: 'review-seed-batch-006',
+          action: '重新取样',
+          reason: '原留样柜位曾漏水受潮、表面有霉点，不能代表本批质量；质检确认后作废原留样并重新取样',
+          qcBy: '质检员 · 赵敏',
+          reviewedAt,
+          newSampleNo: `LY-${batch.batchNo}-R1`,
+          newSampleId: 'sample-007',
+        },
+      ];
+
+      const resampled: RetainSample = {
+        id: 'sample-007',
+        sampleNo: `LY-${batch.batchNo}-R1`,
+        batchId: batch.id,
+        amountG: 300,
+        retainMonths,
+        cabinet: CABINETS[(index * 5 + 3) % CABINETS.length],
+        retainedAt: reviewedAt,
+        observeLogs: [logs(reviewedAt.slice(0, 10), '色泽符合标准', '气味正常', '无霉变', '赵敏')],
+        basisVersion: batch.currentVersion ?? 1,
+        basisDegree: batch.degree,
+        reviewState: '观察中',
+      };
+      created.push(resampled);
+    }
   });
+
+  return created;
 }
 
 /** 首次打开（表内无数据）时写入示例数据；已有数据则不动 */
