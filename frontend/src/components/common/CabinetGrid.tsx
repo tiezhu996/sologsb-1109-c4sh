@@ -1,5 +1,6 @@
 import { Badge, Space, Tooltip, Typography } from 'antd';
 import { CABINETS, type SampleExpiry } from '../../types/retain-sample';
+import { sampleReviewState } from '../../utils/review';
 
 const { Text } = Typography;
 
@@ -37,6 +38,7 @@ export default function CabinetGrid({ expiryList, selected, onSelect }: CabinetG
         <Badge color={STATE_COLOR['观察中']} text="观察中" />
         <Badge color={STATE_COLOR['临期']} text="30 天内到期" />
         <Badge color={STATE_COLOR['已到期']} text="已到期" />
+        <Badge status="processing" color="#cf1322" text="含待复核留样" />
       </Space>
       <div
         style={{
@@ -47,20 +49,26 @@ export default function CabinetGrid({ expiryList, selected, onSelect }: CabinetG
       >
         {CABINETS.map((cabinet) => {
           const items = byCabinet.get(cabinet) ?? [];
+          const hasPending = items.some((i) => sampleReviewState(i.sample) === 'pending');
           const worst = items.reduce<SampleExpiry | undefined>((acc, item) => {
             if (!acc) return item;
             const rank = { 已到期: 3, 临期: 2, 观察中: 1 } as const;
             return rank[item.state] > rank[acc.state] ? item : acc;
           }, undefined);
-          const bg = worst ? STATE_COLOR[worst.state] : '#f0f3f0';
-          const fg = worst ? '#fff' : '#8c9a90';
+          const bg = hasPending ? '#cf1322' : worst ? STATE_COLOR[worst.state] : '#f0f3f0';
+          const fg = worst || hasPending ? '#fff' : '#8c9a90';
           const active = selected === cabinet;
           return (
             <Tooltip
               key={cabinet}
               title={
                 items.length
-                  ? items.map((i) => `${i.sample.sampleNo} · ${i.state} · 剩 ${i.daysLeft} 天`).join('；')
+                  ? items
+                      .map((i) => {
+                        const pending = sampleReviewState(i.sample) === 'pending' ? ' · 待复核' : '';
+                        return `${i.sample.sampleNo} · ${i.state} · 剩 ${i.daysLeft} 天${pending}`;
+                      })
+                      .join('；')
                   : '空柜位'
               }
             >
@@ -76,10 +84,11 @@ export default function CabinetGrid({ expiryList, selected, onSelect }: CabinetG
                   padding: '6px 2px',
                   fontSize: 12,
                   lineHeight: 1.3,
+                  boxShadow: hasPending ? '0 0 0 2px rgba(207, 19, 34, 0.25)' : undefined,
                 }}
               >
                 <div style={{ fontWeight: 600 }}>{cabinet}</div>
-                <div>{items.length ? `${items.length} 份` : '空'}</div>
+                <div>{items.length ? `${items.length} 份${hasPending ? ' · 待复核' : ''}` : '空'}</div>
               </button>
             </Tooltip>
           );

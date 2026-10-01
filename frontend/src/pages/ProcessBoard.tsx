@@ -9,8 +9,9 @@ import { useMethodStore } from '../stores/methodStore';
 import { useBatchStore } from '../stores/batchStore';
 import { useSampleStore } from '../stores/sampleStore';
 import { dueSamples, formatDate } from '../utils/degree';
+import { batchReviewOf, sampleReviewState } from '../utils/review';
 import type { ProcessBatch } from '../types/process-batch';
-import type { SampleExpiry } from '../types/retain-sample';
+import type { RetainSample, SampleExpiry } from '../types/retain-sample';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -23,6 +24,10 @@ export default function ProcessBoard() {
 
   const pending = useMemo(() => batches.filter((b) => !b.locked), [batches]);
   const due = useMemo(() => dueSamples(samples, 30), [samples]);
+  const pendingReview = useMemo(
+    () => samples.filter((s) => sampleReviewState(s) === 'pending'),
+    [samples],
+  );
   const degreeCount = useMemo(() => {
     return batches.reduce(
       (acc, b) => {
@@ -103,7 +108,7 @@ export default function ProcessBoard() {
           <StatBadge label="待炮制（未锁定）批次" value={pending.length} unit="批" status="warning" hint="得率与程度判定提交后即锁定" />
         </Col>
         <Col xs={12} md={6}>
-          <StatBadge label="在册药材批次" value={herbs.length} unit="批" />
+          <StatBadge label="待复核留样" value={pendingReview.length} unit="份" status={pendingReview.length ? 'error' : 'success'} hint="关联批次复核改判为「太过」，待质检员处置" />
         </Col>
         <Col xs={12} md={6}>
           <StatBadge label="30 天内到期留样" value={due.length} unit="份" status={due.length > 0 ? 'error' : 'success'} />
@@ -112,6 +117,33 @@ export default function ProcessBoard() {
           <StatBadge label="平均得率" value={avgYield} unit="%" status="success" hint={`适中 ${degreeCount['适中']} / 不及 ${degreeCount['不及']} / 太过 ${degreeCount['太过']}`} />
         </Col>
       </Row>
+
+      {pendingReview.length > 0 ? (
+        <Alert
+          style={{ marginBottom: 16 }}
+          type="error"
+          showIcon
+          message={`留样复核提醒：${pendingReview.length} 份关联留样因批次复核改判为「太过」而待复核`}
+          description={
+            <Space wrap>
+              {pendingReview.slice(0, 6).map((sample) => {
+                const batch = batches.find((b) => b.id === sample.batchId);
+                const bound = batch ? batchReviewOf(batch, sample.reviewId) : undefined;
+                return (
+                  <Tag key={sample.id} color="red">
+                    {sample.sampleNo}（{batch?.batchNo ?? '未知批次'}，原依据 v{bound?.version ?? '-'} · {bound?.degree ?? '-'}）
+                  </Tag>
+                );
+              })}
+              <Link to="/samples">
+                <Button size="small" type="link">
+                  前往留样台账处置
+                </Button>
+              </Link>
+            </Space>
+          }
+        />
+      ) : null}
 
       {due.length > 0 ? (
         <Alert

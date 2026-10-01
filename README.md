@@ -71,6 +71,7 @@ npm run build    # 类型检查 + 生产构建
 ## 数据存储说明
 
 - 全部数据存于浏览器 IndexedDB（Dexie，库名 `gbherbprocess-db`），表：`herbs`、`methods`、`batches`、`samples`、`meta`。
-- `db.version(1)` 建表声明索引；`db.version(2).upgrade(...)` 为 `batches` 增加 `locked` 索引并回填历史数据。升级前可用顶栏「导出备份」导出全量 JSON。
+- `db.version(1)` 建表声明索引；`db.version(2)` 为 `batches` 增加 `locked` 索引；`db.version(3)` 引入判定版本链（`batches.reviews`）与留样复核状态（`samples.reviewState`/`reviewId`），升级时为已锁定批次补录初判版本、既有留样维持「观察中」并绑定该版本。升级前可用顶栏「导出备份」导出全量 JSON。
+- 质检员对已锁定批次的改判以「复核改判」追加版本：保留前后程度、得率、方法与原因，批次保持锁定；留样绑定登记时所依据的版本，事后仍可对照差异。程度由非「太过」改判为「太过」时，关联的观察中留样先置为「待复核」，质检员说明理由后可沿用原留样（继续观察）或重新取样（新样绑定最新版本、旧样留存备查）；批次写入与留样变更在同一 IndexedDB 事务内，失败整体回滚。
 - 首次打开且表为空时写入一批示例台账（`src/utils/seed.ts`），便于直接查看各页面效果。
 - 容器无状态：不使用数据库服务、不挂载命名卷，`docker compose down` 后数据仍留在浏览器中。

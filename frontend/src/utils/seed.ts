@@ -65,24 +65,60 @@ function buildSeedBatches(): ProcessBatch[] {
       temp: Math.round((method.tempRange[0] + method.tempRange[1]) / 2),
       yieldRate,
     });
-    const locked = index >= 2;
+    const batchId = `batch-${String(index + 1).padStart(3, '0')}`;
+    // 示例：PZ-25081 已锁定且经质检员复核由「适中」改判为「太过」，初判版本保留
+    const rejudged = index === 0;
+    const locked = rejudged || index >= 2;
+    const lockedAt = locked ? new Date(new Date(endedAt).getTime() + 30 * 60_000).toISOString() : undefined;
+    const reviews: ProcessBatch['reviews'] = locked
+      ? [
+          {
+            id: `review-${batchId}-v1`,
+            version: 1,
+            kind: '初判',
+            judgedAt: lockedAt ?? endedAt,
+            judgeBy: '质检员 · 赵敏',
+            degree: verdict.degree,
+            yieldRate,
+            methodId,
+            fireLevel: fireLevel as ProcessBatch['fireLevel'],
+            reason: '初判提交后锁定',
+          },
+        ]
+      : [];
+    if (rejudged) {
+      reviews.push({
+        id: `review-${batchId}-v2`,
+        version: 2,
+        kind: '复核改判',
+        judgedAt: new Date(new Date(endedAt).getTime() + 90 * 60_000).toISOString(),
+        judgeBy: '质检员 · 赵敏',
+        degree: '太过',
+        yieldRate: 88.2,
+        methodId,
+        fireLevel: '中火',
+        reason: '复核发现断面焦褐色、局部焦斑，复检水分与损耗后确认得率仅 88.2%，改判太过并隔离本批',
+      });
+    }
+    const latest = reviews[reviews.length - 1];
     return {
-      id: `batch-${String(index + 1).padStart(3, '0')}`,
+      id: batchId,
       batchNo,
       herbId,
-      methodId,
+      methodId: latest ? latest.methodId : methodId,
       feedKg,
       auxUsedKg,
-      fireLevel: fireLevel as ProcessBatch['fireLevel'],
+      fireLevel: latest ? latest.fireLevel : (fireLevel as ProcessBatch['fireLevel']),
       startedAt,
       endedAt,
-      yieldRate,
-      degree: verdict.degree,
+      yieldRate: latest ? latest.yieldRate : yieldRate,
+      degree: latest ? latest.degree : verdict.degree,
       operator,
       locked,
-      lockedAt: locked ? new Date(new Date(endedAt).getTime() + 30 * 60_000).toISOString() : undefined,
+      lockedAt,
       qcBy: locked ? '质检员 · 赵敏' : undefined,
       remark,
+      reviews,
     };
   });
 }
@@ -100,6 +136,9 @@ function buildSeedSamples(batches: ProcessBatch[]): RetainSample[] {
   return batches.slice(0, 6).map((batch, index) => {
     const retainMonths = [6, 12, 18, 24][index % 4];
     const retainedAt = new Date(Date.now() - (index * 37 + 8) * 86_400_000).toISOString();
+    // 留样绑定登记时本批的最新判定版本；PZ-25081 已改判太过，其留样处于待复核
+    const boundReview = batch.reviews[batch.reviews.length - 1];
+    const pending = index === 0 && batch.degree === '太过';
     return {
       id: `sample-${String(index + 1).padStart(3, '0')}`,
       sampleNo: `LY-${batch.batchNo}`,
@@ -112,6 +151,11 @@ function buildSeedSamples(batches: ProcessBatch[]): RetainSample[] {
         logs(new Date(retainedAt).toISOString().slice(0, 10), '色泽符合标准', '气味正常', '无霉变', '赵敏'),
         logs(new Date(Date.now() - (index * 11 + 2) * 86_400_000).toISOString().slice(0, 10), '色泽略深', '气味正常', '无霉变', '赵敏'),
       ],
+      reviewId: boundReview?.id,
+      reviewState: pending ? ('pending' as const) : ('observing' as const),
+      pendingReason: pending
+        ? `v${boundReview?.version ?? 2} 复核改判为「太过」：复核发现断面焦褐色、局部焦斑，复检水分与损耗后确认得率仅 88.2%，改判太过并隔离本批`
+        : undefined,
     };
   });
 }
